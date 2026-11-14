@@ -22,10 +22,7 @@ def build_simple_cnn(input_shape=(128, 128, 3), num_classes=38):
                       tf.keras.metrics.Precision(name='precision'),
 
                       tf.keras.metrics.Recall(name='recall'),
-                      tf.keras.metrics.AUC(name='auc')
-
-
-                  ])
+                      tf.keras.metrics.AUC(name='auc')])
     return model
 
 def build_modified_cnn(input_shape=(128, 128, 3), num_classes=38):
