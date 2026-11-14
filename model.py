@@ -56,3 +56,25 @@ def build_modified_cnn(input_shape=(128, 128, 3), num_classes=38):
                            tf.keras.metrics.AUC(name='auc')])
 
     return model
+
+def build_mobilenet(input_shape=(128, 128, 3), num_classes=38):
+    base = tf.keras.applications.MobileNetV2(
+        input_shape=input_shape, include_top=False, weights='imagenet')
+    base.trainable = False
+
+    inputs = layers.Input(shape=input_shape)
+    x = layers.Rescaling(scale=2.0, offset=-1.0)(inputs)
+    x = base(x, training=False)
+    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.Dropout(0.3)(x)
+    outputs = layers.Dense(num_classes, activation='softmax')(x)
+    model = models.Model(inputs, outputs)
+
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+                  loss='categorical_crossentropy',
+                  metrics=['accuracy',
+                           tf.keras.metrics.Precision(name='precision'),
+                           tf.keras.metrics.Recall(name='recall'),
+                           tf.keras.metrics.AUC(name='auc')])
+
+    return model
