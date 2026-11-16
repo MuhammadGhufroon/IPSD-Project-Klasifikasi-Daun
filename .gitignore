@@ -1,1 +1,11 @@
 dataset_daun/
+
+*.keras
+*.h5
+*.pt
+*.pth
+
+*.ipynb
+
+__pycache__/
+*.pyc
