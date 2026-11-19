@@ -1,55 +1,85 @@
+"""Training 5-fold stratified cross validation.
+
+Pemakaian:
+    python train.py              # latih algoritma 1, 2, 3
+    python train.py --algos 3    # hanya InceptionV3
+Hasil tiap algoritma disimpan ke hasil_algoN.json (dilewati jika sudah ada).
+"""
 import os
+import json
+import random
+import argparse
+import numpy as np
 import tensorflow as tf
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping
 from tensorflow.keras import mixed_precision
 
-mixed_precision.set_global_policy('mixed_float16')
+mixed_precision.set_global_policy("mixed_float16")  # harus sebelum model dibuat
 
-from preprocessing import load_data_paths, get_data_generators
-from model import build_algo1_simple_cnn, build_algo2_modified_cnn, build_algo3_inceptionv3
+from preprocessing import (SEED, IMG, BATCH, EPOCHS, N_FOLD, NAMA, class_names,
+                           load_dataframe, get_data_generators)
+from model import BUILD
 
-BASE_DIR = "dataset_daun/plantvillage dataset/color"
-df = load_data_paths(BASE_DIR)
 
-skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-train_dg, val_dg = get_data_generators()
-common_args = dict(x_col='filepath', y_col='label', target_size=(128, 128), batch_size=16, class_mode='categorical')
+def main(algos):
+    random.seed(SEED); np.random.seed(SEED); tf.random.set_seed(SEED)
+    print("GPU:", tf.config.list_physical_devices("GPU"))
 
-def train_algoritma(algo_id):
-    print(f"\n=== MEMULAI TRAINING ALGORITMA {algo_id} ===")
-    tf.keras.backend.clear_session()
-    fold_no = 1
-    
-    for train_index, val_index in skf.split(df['filepath'], df['label']):
-        print(f"--- Melatih Fold Ke-{fold_no} ---")
-        train_df = df.iloc[train_index]
-        val_df = df.iloc[val_index]
+    df = load_dataframe()
+    print(len(df), "gambar,", df["label"].nunique(), "kelas")
 
-        train_gen = train_dg.flow_from_dataframe(train_df, shuffle=True, **common_args)
-        val_gen = val_dg.flow_from_dataframe(val_df, shuffle=False, **common_args)
+    skf = StratifiedKFold(n_splits=N_FOLD, shuffle=True, random_state=SEED)
+    folds = list(skf.split(df["filepath"], df["label"]))
+    common = dict(x_col="filepath", y_col="label", target_size=IMG, batch_size=BATCH,
+                  class_mode="categorical", classes=class_names)
 
-        if algo_id == 1:
-            model = build_algo1_simple_cnn()
-        elif algo_id == 2:
-            model = build_algo2_modified_cnn()
-        else:
-            model = build_algo3_inceptionv3()
+    for algo in algos:
+        fn = f"hasil_algo{algo}.json"
+        if os.path.exists(fn):
+            print(f"{NAMA[algo]}: sudah ada ({fn}), dilewati")
+            continue
 
-        callbacks = [
-            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-5),
-            EarlyStopping(monitor='val_loss', patience=4, restore_best_weights=True)
-        ]
+        res = {"hist": [], "fold": [], "y_true": [], "y_pred": []}
+        for k, (tr_idx, te_idx) in enumerate(folds, start=1):
+            print(f"\n===== {NAMA[algo]} - Fold {k}/{N_FOLD} =====")
+            tf.keras.backend.clear_session()
+            tr_df, te_df = df.iloc[tr_idx], df.iloc[te_idx]
+            tr_df, va_df = train_test_split(tr_df, test_size=0.1,
+                                            stratify=tr_df["label"], random_state=SEED)
 
-        model.fit(train_gen, validation_data=val_gen, epochs=10, callbacks=callbacks, verbose=1)
-        
-        if fold_no == 5:
-            model.save(f'model_algo{algo_id}_final.keras')
-            print(f"Model Algoritma {algo_id} berhasil disimpan!")
-            
-        fold_no += 1
+            train_dg, val_dg = get_data_generators()
+            tr_gen = train_dg.flow_from_dataframe(tr_df, shuffle=True, **common)
+            va_gen = val_dg.flow_from_dataframe(va_df, shuffle=False, **common)
+            te_gen = val_dg.flow_from_dataframe(te_df, shuffle=False, **common)
+
+            model = BUILD[algo](input_shape=IMG + (3,), num_classes=len(class_names))
+            cb = [ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, min_lr=1e-5),
+                  EarlyStopping(monitor="val_loss", patience=4, restore_best_weights=True)]
+            h = model.fit(tr_gen, validation_data=va_gen, epochs=EPOCHS, callbacks=cb, verbose=2)
+
+            ev = model.evaluate(te_gen, return_dict=True, verbose=0)
+            y_pred = model.predict(te_gen, verbose=0).argmax(axis=1)
+            y_true = te_gen.classes
+            p_, r_, f_, _ = precision_recall_fscore_support(y_true, y_pred, average="macro",
+                                                            zero_division=0)
+            row = {"Fold": k, "Loss": float(ev["loss"]),
+                   "Accuracy": float(accuracy_score(y_true, y_pred)),
+                   "Precision": float(p_), "Recall": float(r_), "F1": float(f_),
+                   "AUC": float(ev["auc"])}
+            print(row)
+            res["fold"].append(row)
+            res["hist"].append({kk: [float(x) for x in v] for kk, v in h.history.items()
+                                if kk in ("loss", "val_loss", "accuracy", "val_accuracy")})
+            res["y_true"] += [int(x) for x in y_true]
+            res["y_pred"] += [int(x) for x in y_pred]
+
+        json.dump(res, open(fn, "w"))
+    print("\nSelesai.")
+
 
 if __name__ == "__main__":
-    train_algoritma(1)
-    train_algoritma(2)
-    train_algoritma(3)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--algos", type=int, nargs="+", default=[1, 2, 3], choices=[1, 2, 3])
+    main(ap.parse_args().algos)

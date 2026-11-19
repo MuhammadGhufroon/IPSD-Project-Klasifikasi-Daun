@@ -1,11 +1,14 @@
+# dataset & unduhan
 dataset_daun/
-
-*.keras
-*.h5
-*.pt
-*.pth
-
-*.ipynb
-
+*.zip
+# kredensial (jangan pernah di-commit)
+kaggle.json
+access_token
+.env
+# python
 __pycache__/
 *.pyc
+.ipynb_checkpoints/
+# model
+*.h5
+*.keras
